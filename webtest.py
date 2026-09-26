@@ -1,4 +1,3 @@
-
 import tkinter as tk
 from tkinter import messagebox
 import sqlite3
@@ -16,7 +15,7 @@ from urllib.error import HTTPError, URLError
 # ============================================================
 
 APP_ID = "7757f192"
-APP_KEY = "8a25186bd7572c44b87a3819322588d"
+APP_KEY = "8a25186bd7572c44b87a3819322588d3"
 
 JOBS_FILE = "jobs.json"
 
@@ -315,7 +314,7 @@ def search_jobs_api(description):
 
         "what": description,
 
-        "results_per_page": 10
+        "results_per_page": 5
     }
 
     request_url = (
