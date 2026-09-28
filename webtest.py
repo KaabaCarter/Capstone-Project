@@ -4,6 +4,7 @@ import sqlite3
 import json
 import webbrowser
 import threading
+from manual_job import open_manual_job_window
 
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -658,10 +659,18 @@ def open_dashboard():
         pady=10
     )
 
+    # Button to manually add a job
+    tk.Button(
+        dashboard,
+        text="+ Add Job Manually",
+        command=open_manual_job_window
+    ).pack(
+        pady=5
+    )
+
     jobs = load_jobs()
 
     if not jobs:
-
         tk.Label(
             dashboard,
             text="No jobs saved yet.",
