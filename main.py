@@ -1,10 +1,14 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import sqlite3
 import json
 import webbrowser
 import threading
+import os
+import sys
+import subprocess
 from pathlib import Path
+import shutil
 
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -21,10 +25,12 @@ APP_KEY = "8a25186bd7572c44b87a3819322588d3"
 BASE_DIR = Path(__file__).resolve().parent
 DB_FILE = BASE_DIR / "users.db"
 JOBS_FILE = BASE_DIR / "jobs.json"
+RESUME_DIR = BASE_DIR / "resumes"
+RESUME_DIR.mkdir(exist_ok=True)
 
 
 # ============================================================
-# DATABASE
+# DATABASE SETUP & MIGRATION
 # ============================================================
 
 conn = sqlite3.connect(DB_FILE)
@@ -33,11 +39,31 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
-    password TEXT NOT NULL
+    password TEXT NOT NULL,
+    first_name TEXT,
+    last_name TEXT,
+    email TEXT,
+    phone TEXT,
+    resume_path TEXT
 )
 """)
-
 conn.commit()
+
+# Ensure older databases get any missing columns via migration
+existing_columns = [col[1] for col in cursor.execute("PRAGMA table_info(users)").fetchall()]
+for col_name, col_type in [
+    ("first_name", "TEXT"),
+    ("last_name", "TEXT"),
+    ("email", "TEXT"),
+    ("phone", "TEXT"),
+    ("resume_path", "TEXT")
+]:
+    if col_name not in existing_columns:
+        try:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
 
 # ============================================================
@@ -56,6 +82,17 @@ root.geometry("800x650")
 
 username_entry = None
 password_entry = None
+
+# Registration entries
+reg_username_entry = None
+reg_password_entry = None
+reg_first_name_entry = None
+reg_last_name_entry = None
+reg_email_entry = None
+reg_phone_entry = None
+selected_resume_path = None
+resume_label = None
+
 search_box = None
 results = None
 search_button = None
@@ -73,46 +110,276 @@ def clear_window():
 
 
 # ============================================================
-# REGISTER
+# BROWSE RESUME
 # ============================================================
 
-def register():
+def browse_resume():
+    global selected_resume_path, resume_label
+    file_path = filedialog.askopenfilename(
+        title="Select Resume",
+        filetypes=[
+            ("PDF Documents", "*.pdf"),
+            ("Word Documents", "*.docx"),
+            ("All Files", "*.*")
+        ]
+    )
+    if file_path:
+        selected_resume_path = file_path
+        filename = Path(file_path).name
+        if resume_label:
+            resume_label.config(text=f"Selected: {filename}", fg="green")
 
-    username = username_entry.get().strip()
-    password = password_entry.get()
 
-    if username == "" or password == "":
+# ============================================================
+# REGISTER USER
+# ============================================================
 
-        messagebox.showerror(
-            "Error",
-            "Please enter a username and password."
-        )
+def register_user():
+    global selected_resume_path
 
+    username = reg_username_entry.get().strip()
+    password = reg_password_entry.get()
+    first_name = reg_first_name_entry.get().strip()
+    last_name = reg_last_name_entry.get().strip()
+    email = reg_email_entry.get().strip()
+    phone = reg_phone_entry.get().strip()
+
+    if not username or not password:
+        messagebox.showerror("Error", "Username and password are required.")
         return
 
+    stored_resume_path = ""
+    if selected_resume_path and Path(selected_resume_path).exists():
+        try:
+            dest_path = RESUME_DIR / f"{username}_{Path(selected_resume_path).name}"
+            shutil.copy(selected_resume_path, dest_path)
+            stored_resume_path = str(dest_path)
+        except Exception as e:
+            messagebox.showwarning("Warning", f"Could not save resume file: {e}")
+
     try:
-
         cursor.execute(
-            "INSERT INTO users (username, password) VALUES (?, ?)",
-            (username, password)
+            """
+            INSERT INTO users (username, password, first_name, last_name, email, phone, resume_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (username, password, first_name, last_name, email, phone, stored_resume_path)
         )
-
         conn.commit()
 
-        messagebox.showinfo(
-            "Success",
-            "Account created successfully!"
-        )
-
-        username_entry.delete(0, tk.END)
-        password_entry.delete(0, tk.END)
+        messagebox.showinfo("Success", "Account created successfully!")
+        show_login_screen()
 
     except sqlite3.IntegrityError:
+        messagebox.showerror("Error", "Username already exists.")
 
-        messagebox.showerror(
-            "Error",
-            "Username already exists."
-        )
+
+# ============================================================
+# SHOW REGISTER SCREEN
+# ============================================================
+
+def show_register_screen():
+    global reg_username_entry, reg_password_entry
+    global reg_first_name_entry, reg_last_name_entry
+    global reg_email_entry, reg_phone_entry
+    global selected_resume_path, resume_label
+
+    clear_window()
+    selected_resume_path = None
+
+    # Header / Back
+    header = tk.Frame(root, height=50)
+    header.pack(fill="x", padx=10, pady=10)
+
+    tk.Button(
+        header,
+        text="Back to Login",
+        command=show_login_screen
+    ).pack(side="left")
+
+    tk.Label(
+        root,
+        text="Create JobTrac Account",
+        font=("Arial", 22, "bold"),
+        fg="#1f4e79"
+    ).pack(pady=(0, 10))
+
+    # Scrollable form container
+    container = tk.Frame(root)
+    container.pack(fill="both", expand=True, padx=20, pady=5)
+
+    canvas = tk.Canvas(container)
+    scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+    form_frame = tk.Frame(canvas)
+
+    form_frame.bind(
+        "<Configure>",
+        lambda event: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+
+    canvas.create_window((0, 0), window=form_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    def add_field(label_text, is_password=False):
+        tk.Label(form_frame, text=label_text, font=("Arial", 11)).pack(anchor="w", pady=(5, 2))
+        entry = tk.Entry(form_frame, width=40, font=("Arial", 11), show="*" if is_password else "")
+        entry.pack(anchor="w", pady=2)
+        return entry
+
+    reg_first_name_entry = add_field("First Name")
+    reg_last_name_entry = add_field("Last Name")
+    reg_email_entry = add_field("Email Address")
+    reg_phone_entry = add_field("Phone Number")
+    reg_username_entry = add_field("Username *")
+    reg_password_entry = add_field("Password *", is_password=True)
+
+    # Resume upload section
+    tk.Label(form_frame, text="Resume Upload (PDF / DOCX)", font=("Arial", 11)).pack(anchor="w", pady=(10, 2))
+    resume_btn_frame = tk.Frame(form_frame)
+    resume_btn_frame.pack(anchor="w", pady=2)
+
+    tk.Button(
+        resume_btn_frame,
+        text="Browse Resume...",
+        command=browse_resume
+    ).pack(side="left")
+
+    resume_label = tk.Label(resume_btn_frame, text="No file selected", fg="gray", font=("Arial", 10))
+    resume_label.pack(side="left", padx=10)
+
+    # Submit Register Button
+    tk.Button(
+        form_frame,
+        text="Register Account",
+        command=register_user,
+        width=25,
+        bg="#1f4e79",
+        fg="white",
+        font=("Arial", 11, "bold")
+    ).pack(anchor="w", pady=(20, 20))
+
+
+# ============================================================
+# ACCOUNT INFORMATION VIEW
+# ============================================================
+
+def open_file_externally(file_path):
+    if not file_path or not Path(file_path).exists():
+        messagebox.showerror("Error", "Resume file does not exist on disk.")
+        return
+    
+    try:
+        if sys.platform == "win32":
+            os.startfile(file_path)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", file_path], check=True)
+        else:
+            subprocess.run(["xdg-open", file_path], check=True)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to open file: {e}")
+
+
+def show_account_info():
+    clear_window()
+
+    # Header navigation
+    header = tk.Frame(root, bg="#000000", height=70)
+    header.pack(fill="x")
+
+    tk.Label(
+        header,
+        text="Account Profile",
+        font=("Arial", 20, "bold"),
+        bg="#000000",
+        fg="white"
+    ).pack(side="left", padx=20, pady=15)
+
+    tk.Button(
+        header,
+        text="Back to Search",
+        command=lambda: open_main_app(current_username)
+    ).pack(side="right", padx=10)
+
+    tk.Button(
+        header,
+        text="Dashboard",
+        command=open_dashboard
+    ).pack(side="right", padx=5)
+
+    cursor.execute(
+        """
+        SELECT username, first_name, last_name, email, phone, resume_path
+        FROM users WHERE username = ?
+        """,
+        (current_username,)
+    )
+    user_info = cursor.fetchone()
+
+    if not user_info:
+        messagebox.showerror("Error", "User details not found.")
+        open_main_app(current_username)
+        return
+
+    username, first_name, last_name, email, phone, resume_path = user_info
+
+    info_card = tk.LabelFrame(
+        root,
+        text=" Personal Details ",
+        font=("Arial", 14, "bold"),
+        padx=20,
+        pady=20
+    )
+    info_card.pack(fill="both", expand=True, padx=40, pady=30)
+
+    details = [
+        ("Username:", username or "N/A"),
+        ("First Name:", first_name or "N/A"),
+        ("Last Name:", last_name or "N/A"),
+        ("Email Address:", email or "N/A"),
+        ("Phone Number:", phone or "N/A"),
+    ]
+
+    for idx, (label, val) in enumerate(details):
+        tk.Label(
+            info_card,
+            text=label,
+            font=("Arial", 11, "bold")
+        ).grid(row=idx, column=0, sticky="w", pady=6)
+
+        tk.Label(
+            info_card,
+            text=val,
+            font=("Arial", 11)
+        ).grid(row=idx, column=1, sticky="w", padx=15, pady=6)
+
+    # Resume section
+    resume_row = len(details)
+    tk.Label(
+        info_card,
+        text="Resume File:",
+        font=("Arial", 11, "bold")
+    ).grid(row=resume_row, column=0, sticky="w", pady=10)
+
+    if resume_path and Path(resume_path).exists():
+        file_name = Path(resume_path).name
+        res_frame = tk.Frame(info_card)
+        res_frame.grid(row=resume_row, column=1, sticky="w", padx=15, pady=10)
+
+        tk.Label(res_frame, text=file_name, font=("Arial", 11), fg="green").pack(side="left")
+        tk.Button(
+            res_frame,
+            text="Open Resume",
+            command=lambda p=resume_path: open_file_externally(p)
+        ).pack(side="left", padx=10)
+    else:
+        tk.Label(
+            info_card,
+            text="No resume uploaded",
+            font=("Arial", 11),
+            fg="gray"
+        ).grid(row=resume_row, column=1, sticky="w", padx=15, pady=10)
 
 
 # ============================================================
@@ -197,10 +464,8 @@ def add_job(job):
     job_id = str(job.get("id", "")).strip()
 
     if not job_id:
-        # Fall back to the application URL/title when an API result has no ID.
-        job_id = f"{job.get("title", "job")}|{job.get("redirect_url", "")}"
+        job_id = f"{job.get('title', 'job')}|{job.get('redirect_url', '')}"
 
-    # Prevent duplicate jobs
     for saved_job in jobs:
 
         if str(saved_job.get("id", "")) == job_id:
@@ -277,7 +542,6 @@ def search_jobs():
 
         return
 
-    # Disable search button
     search_button.config(
         state="disabled"
     )
@@ -292,7 +556,6 @@ def search_jobs():
         "Searching for jobs...\n\n"
     )
 
-    # Run API request in background
     thread = threading.Thread(
         target=search_jobs_api,
         args=(description,),
@@ -336,7 +599,6 @@ def search_jobs_api(description):
 
             data = json.load(response)
 
-        # Send results back to Tkinter
         root.after(
             0,
             lambda: display_search_results(data)
@@ -426,16 +688,12 @@ def display_search_results(data):
             "redirect_url"
         )
 
-        # Job information
-
         results.insert(
             tk.END,
             f"{title}\n"
             f"Company: {company}\n"
             f"Location: {location}\n"
         )
-
-        # Apply link
 
         if job_url:
 
@@ -475,9 +733,6 @@ def display_search_results(data):
                     webbrowser.open(url)
             )
 
-        # Add job button can't be placed inside Text,
-        # so we use a keyboard-friendly ID below.
-
         results.insert(
             tk.END,
             f"Job ID: {job.get('id', 'N/A')}\n"
@@ -492,7 +747,6 @@ def display_search_results(data):
         state="normal"
     )
 
-    # Show add-job window
     show_add_job_buttons(jobs)
 
 
@@ -502,74 +756,73 @@ def display_search_results(data):
 
 def show_add_job_buttons(jobs):
 
-    # Create a window containing Add buttons
+    clear_window()
+    root.title("Add Jobs to Dashboard")
+    
+    header = tk.Frame(root)
+    header.pack(fill="x", padx=10, pady=(10, 0))
 
-    add_window = tk.Toplevel(root)
-
-    add_window.title(
-        "Add Jobs to Dashboard"
-    )
-
-    add_window.geometry(
-        "600x500"
-    )
+    tk.Button(
+        header,
+        text="Back to Search",
+        command=lambda: open_main_app(current_username)
+    ).pack(side="left")
 
     tk.Label(
-        add_window,
+        root,
         text="Add Jobs to Dashboard",
         font=("Arial", 16, "bold")
-    ).pack(
-        pady=10
+    ).pack(pady=10)
+
+    if not jobs:
+        tk.Label(root, text="No jobs to display.").pack(pady=10)
+        return
+
+    container = tk.Frame(root)
+    container.pack(fill="both", expand=True, padx=10, pady=5)
+
+    canvas = tk.Canvas(container)
+    scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+    scrollable_frame = tk.Frame(canvas)
+
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda event: canvas.configure(scrollregion=canvas.bbox("all"))
     )
 
-    for job in jobs:
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
 
+    for job in jobs:
         frame = tk.Frame(
-            add_window,
+            scrollable_frame,
             bd=1,
             relief="solid",
             padx=10,
             pady=8
         )
+        frame.pack(fill="x", padx=5, pady=4)
 
-        frame.pack(
-            fill="x",
-            padx=10,
-            pady=4
-        )
-
-        title = job.get(
-            "title",
-            "No title"
-        )
-
-        company = job.get(
-            "company",
-            {}
-        ).get(
-            "display_name",
-            "Unknown company"
-        )
+        title = job.get("title", "No title")
+        company = job.get("company", {}).get("display_name", "Unknown company")
 
         tk.Label(
             frame,
-            text=title,
+            text=f"{title}\n{company}",
             font=("Arial", 11, "bold"),
-            wraplength=400
-        ).pack(
-            side="left"
-        )
+            wraplength=400,
+            justify="left"
+        ).pack(side="left", fill="x", expand=True)
 
         tk.Button(
             frame,
             text="Add",
-            command=lambda j=job:
-                add_job(j)
-        ).pack(
-            side="right"
-        )
-
-
+            command=lambda j=job: add_job(j)
+        ).pack(side="right", padx=(8, 0))
+        
+        
 # ============================================================
 # SEARCH ERROR
 # ============================================================
@@ -605,9 +858,8 @@ def change_status(job_id, status):
             break
 
     save_jobs(jobs)
-
-    # Refresh dashboard in the same window
     open_dashboard()
+
 
 # ============================================================
 # DELETE JOB
@@ -629,8 +881,6 @@ def delete_job(job_id):
     ]
 
     save_jobs(jobs)
-
-    # Refresh dashboard in the same window
     open_dashboard()
 
 
@@ -638,16 +888,12 @@ def delete_job(job_id):
 # OPEN DASHBOARD
 # ============================================================
 
-
-
 def open_dashboard():
 
     global search_box, results, search_button
 
-    # Clear the current screen instead of opening a new window
     clear_window()
 
-    # Header
     header = tk.Frame(
         root,
         bg="#000000",
@@ -663,14 +909,18 @@ def open_dashboard():
         fg="white"
     ).pack(side="left", padx=20, pady=15)
 
-    # Back button
+    tk.Button(
+        header,
+        text="Account",
+        command=show_account_info
+    ).pack(side="right", padx=5)
+
     tk.Button(
         header,
         text="Back to Search",
         command=lambda: open_main_app(current_username)
     ).pack(side="right", padx=20)
 
-    # Dashboard title
     tk.Label(
         root,
         text="My Job Dashboard",
@@ -688,7 +938,6 @@ def open_dashboard():
 
         return
 
-    # Scrollable area
     container = tk.Frame(root)
     container.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -719,7 +968,6 @@ def open_dashboard():
     canvas.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
 
-    # Display saved jobs
     for job in jobs:
 
         job_frame = tk.Frame(
@@ -797,8 +1045,6 @@ def open_main_app(username):
 
     clear_window()
 
-    # Header
-
     header = tk.Frame(
         root,
         bg="#000000",
@@ -809,9 +1055,6 @@ def open_main_app(username):
         fill="x"
     )
 
-    # JobTrac Logo
-    # Put your logo PNG in the same folder as this Python file
-    # and name it "logo.png".
     try:
         logo_image = tk.PhotoImage(
             file=BASE_DIR / "logo.png"
@@ -824,10 +1067,8 @@ def open_main_app(username):
             bg="#000000",
             width=250,
             height=80
-            
         )
 
-        # Keep a reference so Tkinter does not remove the image
         logo_label.image = logo_image
 
         logo_label.pack(
@@ -837,7 +1078,6 @@ def open_main_app(username):
         )
 
     except tk.TclError:
-        # If logo.png is missing, use text instead
         tk.Label(
             header,
             text="JobTrac",
@@ -849,6 +1089,15 @@ def open_main_app(username):
             padx=20,
             pady=15
         )
+
+    tk.Button(
+        header,
+        text="Account",
+        command=show_account_info
+    ).pack(
+        side="right",
+        padx=5
+    )
 
     tk.Button(
         header,
@@ -868,8 +1117,6 @@ def open_main_app(username):
         padx=20
     )
 
-    # Welcome
-
     tk.Label(
         root,
         text=f"Welcome, {username}!",
@@ -886,8 +1133,6 @@ def open_main_app(username):
         pady=(0, 15)
     )
 
-    # Search question
-
     tk.Label(
         root,
         text="What type of job are you looking for?",
@@ -895,8 +1140,6 @@ def open_main_app(username):
     ).pack(
         pady=5
     )
-
-    # Search box
 
     search_box = tk.Entry(
         root,
@@ -914,8 +1157,6 @@ def open_main_app(username):
             search_jobs()
     )
 
-    # Search button
-
     search_button = tk.Button(
         root,
         text="Search Jobs",
@@ -930,8 +1171,6 @@ def open_main_app(username):
     search_button.pack(
         pady=10
     )
-
-    # Results area
 
     results_frame = tk.Frame(
         root
@@ -992,8 +1231,6 @@ def show_login_screen():
 
     clear_window()
 
-    # Title
-
     tk.Label(
         root,
         text="JobTrac",
@@ -1017,8 +1254,6 @@ def show_login_screen():
 
     login_frame.pack()
 
-    # Username
-
     tk.Label(
         login_frame,
         text="Username",
@@ -1036,8 +1271,6 @@ def show_login_screen():
     username_entry.pack(
         pady=5
     )
-
-    # Password
 
     tk.Label(
         login_frame,
@@ -1058,8 +1291,6 @@ def show_login_screen():
         pady=5
     )
 
-    # Login
-
     tk.Button(
         login_frame,
         text="Login",
@@ -1072,12 +1303,10 @@ def show_login_screen():
         pady=(15, 5)
     )
 
-    # Register
-
     tk.Button(
         login_frame,
         text="Register",
-        command=register,
+        command=show_register_screen,
         width=20,
         font=("Arial", 11)
     ).pack(
@@ -1116,8 +1345,4 @@ root.protocol(
 
 show_login_screen()
 
-root.mainloop()
-
-
-# Run the application
 root.mainloop()
