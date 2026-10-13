@@ -201,7 +201,7 @@ def show_register_screen():
         root,
         text="Create JobTrac Account",
         font=("Arial", 22, "bold"),
-        fg="#1f4e79"
+        fg="#000000"
     ).pack(pady=(0, 10))
 
     # Scrollable form container
@@ -255,7 +255,7 @@ def show_register_screen():
         text="Register Account",
         command=register_user,
         width=25,
-        bg="#1f4e79",
+        bg="#000000",
         fg="white",
         font=("Arial", 11, "bold")
     ).pack(anchor="w", pady=(20, 20))
@@ -1235,7 +1235,7 @@ def show_login_screen():
         root,
         text="JobTrac",
         font=("Arial", 30, "bold"),
-        fg="#1f4e79"
+        fg="#000000"
     ).pack(
         pady=(40, 5)
     )
@@ -1296,7 +1296,7 @@ def show_login_screen():
         text="Login",
         command=login,
         width=20,
-        bg="#1f4e79",
+        bg="#000000",
         fg="white",
         font=("Arial", 11, "bold")
     ).pack(
@@ -1308,6 +1308,8 @@ def show_login_screen():
         text="Register",
         command=show_register_screen,
         width=20,
+        bg="#000000",
+        fg="white",
         font=("Arial", 11)
     ).pack(
         pady=5
