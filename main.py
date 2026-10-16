@@ -265,6 +265,8 @@ def show_register_screen():
 # ACCOUNT INFORMATION VIEW
 # ============================================================
 
+
+
 def open_file_externally(file_path):
     if not file_path or not Path(file_path).exists():
         messagebox.showerror("Error", "Resume file does not exist on disk.")
@@ -281,8 +283,266 @@ def open_file_externally(file_path):
         messagebox.showerror("Error", f"Failed to open file: {e}")
 
 
+
+def edit_account_info(username):
+    global current_username
+
+    clear_window()
+    root.title("Edit JobTrac Account")
+
+    # Get the current account information, including password
+    cursor.execute(
+        """
+        SELECT username, password, first_name, last_name,
+               email, phone, resume_path
+        FROM users
+        WHERE username = ?
+        """,
+        (username,)
+    )
+    user_info = cursor.fetchone()
+
+    if not user_info:
+        messagebox.showerror("Error", "User details not found.")
+        open_main_app(current_username)
+        return
+
+    (
+        old_username, old_password, first_name, last_name,
+        email, phone, resume_path
+    ) = user_info
+
+    # Track a newly selected resume without replacing the old one yet
+    new_resume_path = {"path": None}
+
+    # Header
+    header = tk.Frame(root, bg="#000000", height=70)
+    header.pack(fill="x")
+
+    tk.Label(
+        header,
+        text="Edit Account Information",
+        font=("Arial", 19, "bold"),
+        bg="#000000",
+        fg="white"
+    ).pack(side="left", padx=20, pady=15)
+
+    tk.Button(
+        header,
+        text="Back to Account",
+        command=show_account_info
+    ).pack(side="right", padx=15)
+
+    # Form
+    form = tk.LabelFrame(
+        root,
+        text=" Update Your Details ",
+        font=("Arial", 13, "bold"),
+        padx=25,
+        pady=20
+    )
+    form.pack(fill="both", expand=True, padx=35, pady=20)
+
+    def add_field(label_text, value="", show=None):
+        tk.Label(
+            form,
+            text=label_text,
+            font=("Arial", 10, "bold")
+        ).pack(anchor="w", pady=(7, 2))
+
+        entry = tk.Entry(
+            form,
+            width=40,
+            font=("Arial", 11),
+            show=show or ""
+        )
+        entry.pack(anchor="w", pady=(0, 3))
+        entry.insert(0, value or "")
+        return entry
+
+    username_entry = add_field("Username *", old_username)
+    first_name_entry = add_field("First Name", first_name)
+    last_name_entry = add_field("Last Name", last_name)
+    email_entry = add_field("Email Address", email)
+    phone_entry = add_field("Phone Number", phone)
+
+    password_entry = add_field(
+        "New Password (leave blank to keep current password)",
+        show="*"
+    )
+
+    # Resume upload
+    tk.Label(
+        form,
+        text="Resume",
+        font=("Arial", 10, "bold")
+    ).pack(anchor="w", pady=(12, 2))
+
+    resume_name_label = tk.Label(
+        form,
+        text=(
+            Path(resume_path).name
+            if resume_path and Path(resume_path).exists()
+            else "No resume uploaded"
+        ),
+        fg="green" if resume_path and Path(resume_path).exists()
+        else "gray"
+    )
+    resume_name_label.pack(anchor="w", pady=3)
+
+    def select_new_resume():
+        file_path = filedialog.askopenfilename(
+            title="Select New Resume",
+            filetypes=[
+                ("PDF Documents", "*.pdf"),
+                ("Word Documents", "*.docx"),
+                ("All Files", "*.*")
+            ]
+        )
+
+        if file_path:
+            new_resume_path["path"] = file_path
+            resume_name_label.config(
+                text=f"New resume: {Path(file_path).name}",
+                fg="green"
+            )
+
+    tk.Button(
+        form,
+        text="Upload New Resume",
+        command=select_new_resume
+    ).pack(anchor="w", pady=5)
+
+    def save_account_changes():
+        global current_username
+
+        updated_username = username_entry.get().strip()
+        updated_first_name = first_name_entry.get().strip()
+        updated_last_name = last_name_entry.get().strip()
+        updated_email = email_entry.get().strip()
+        updated_phone = phone_entry.get().strip()
+        new_password = password_entry.get()
+
+        if not updated_username:
+            messagebox.showerror(
+                "Error",
+                "Username is required."
+            )
+            return
+
+        # Check whether another account already uses this username
+        cursor.execute(
+            "SELECT username FROM users WHERE username = ?",
+            (updated_username,)
+        )
+        existing_user = cursor.fetchone()
+
+        if existing_user and updated_username != old_username:
+            messagebox.showerror(
+                "Error",
+                "That username is already taken."
+            )
+            return
+
+        # Keep the existing password unless a new one is provided
+        updated_password = new_password if new_password else old_password
+
+        # Keep the existing resume unless a new one is selected
+        updated_resume_path = resume_path or ""
+
+        if new_resume_path["path"]:
+            source_path = Path(new_resume_path["path"])
+
+            try:
+                RESUME_DIR.mkdir(parents=True, exist_ok=True)
+
+                # Use a distinct filename for the updated resume
+                destination = RESUME_DIR / (
+                    f"{updated_username}_{source_path.name}"
+                )
+
+                shutil.copy2(source_path, destination)
+                updated_resume_path = str(destination)
+
+            except OSError as error:
+                messagebox.showerror(
+                    "Resume Error",
+                    f"Could not save the new resume:\n{error}"
+                )
+                return
+
+        try:
+            cursor.execute(
+                """
+                UPDATE users
+                SET username = ?,
+                    password = ?,
+                    first_name = ?,
+                    last_name = ?,
+                    email = ?,
+                    phone = ?,
+                    resume_path = ?
+                WHERE username = ?
+                """,
+                (
+                    updated_username,
+                    updated_password,
+                    updated_first_name,
+                    updated_last_name,
+                    updated_email,
+                    updated_phone,
+                    updated_resume_path,
+                    old_username
+                )
+            )
+            conn.commit()
+
+            # Update the active session if the username changed
+            current_username = updated_username
+
+            messagebox.showinfo(
+                "Success",
+                "Your account information has been updated!"
+            )
+
+            show_account_info()
+
+        except sqlite3.Error as error:
+            conn.rollback()
+            messagebox.showerror(
+                "Database Error",
+                f"Could not update your account:\n{error}"
+            )
+
+    # Action buttons
+    button_frame = tk.Frame(form)
+    button_frame.pack(anchor="w", pady=18)
+
+    tk.Button(
+        button_frame,
+        text="Save Changes",
+        command=save_account_changes,
+        bg="#000000",
+        fg="white",
+        font=("Arial", 11, "bold"),
+        padx=12,
+        pady=5
+    ).pack(side="left", padx=(0, 10))
+
+    tk.Button(
+        button_frame,
+        text="Cancel",
+        command=show_account_info,
+        padx=12,
+        pady=5
+    ).pack(side="left")
+
+    
+
 def show_account_info():
     clear_window()
+    
+    
 
     # Header navigation
     header = tk.Frame(root, bg="#000000", height=70)
@@ -307,6 +567,12 @@ def show_account_info():
         text="Dashboard",
         command=open_dashboard
     ).pack(side="right", padx=5)
+    
+    tk.Button(
+            header,
+            text="Edit Account",
+            command=lambda: edit_account_info(current_username)
+        ).pack(side="right", padx=5)
 
     cursor.execute(
         """
