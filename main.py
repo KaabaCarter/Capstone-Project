@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS users (
     last_name TEXT,
     email TEXT,
     phone TEXT,
+    location TEXT,
     resume_path TEXT
 )
 """)
@@ -56,6 +57,7 @@ for col_name, col_type in [
     ("last_name", "TEXT"),
     ("email", "TEXT"),
     ("phone", "TEXT"),
+    ("location", "TEXT"),
     ("resume_path", "TEXT")
 ]:
     if col_name not in existing_columns:
@@ -90,6 +92,7 @@ reg_first_name_entry = None
 reg_last_name_entry = None
 reg_email_entry = None
 reg_phone_entry = None
+reg_location_entry = None
 selected_resume_path = None
 resume_label = None
 
@@ -143,6 +146,7 @@ def register_user():
     last_name = reg_last_name_entry.get().strip()
     email = reg_email_entry.get().strip()
     phone = reg_phone_entry.get().strip()
+    location = reg_location_entry.get().strip()
 
     if not username or not password:
         messagebox.showerror("Error", "Username and password are required.")
@@ -160,8 +164,8 @@ def register_user():
     try:
         cursor.execute(
             """
-            INSERT INTO users (username, password, first_name, last_name, email, phone, resume_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO users (username, password, first_name, last_name, email, phone, location, resume_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (username, password, first_name, last_name, email, phone, stored_resume_path)
         )
@@ -182,6 +186,7 @@ def show_register_screen():
     global reg_username_entry, reg_password_entry
     global reg_first_name_entry, reg_last_name_entry
     global reg_email_entry, reg_phone_entry
+    global reg_location_entry
     global selected_resume_path, resume_label
 
     clear_window()
@@ -232,6 +237,7 @@ def show_register_screen():
     reg_last_name_entry = add_field("Last Name")
     reg_email_entry = add_field("Email Address")
     reg_phone_entry = add_field("Phone Number")
+    reg_location_entry = add_field("Location (City, State, Country)")
     reg_username_entry = add_field("Username *")
     reg_password_entry = add_field("Password *", is_password=True)
 
@@ -294,7 +300,7 @@ def edit_account_info(username):
     cursor.execute(
         """
         SELECT username, password, first_name, last_name,
-               email, phone, resume_path
+               email, phone, location, resume_path
         FROM users
         WHERE username = ?
         """,
@@ -309,7 +315,7 @@ def edit_account_info(username):
 
     (
         old_username, old_password, first_name, last_name,
-        email, phone, resume_path
+        email, phone, location, resume_path
     ) = user_info
 
     # Track a newly selected resume without replacing the old one yet
@@ -365,7 +371,7 @@ def edit_account_info(username):
     last_name_entry = add_field("Last Name", last_name)
     email_entry = add_field("Email Address", email)
     phone_entry = add_field("Phone Number", phone)
-
+    location_entry = add_field("Location (City, State, Country)", location)      
     password_entry = add_field(
         "New Password (leave blank to keep current password)",
         show="*"
@@ -421,6 +427,7 @@ def edit_account_info(username):
         updated_last_name = last_name_entry.get().strip()
         updated_email = email_entry.get().strip()
         updated_phone = phone_entry.get().strip()
+        updated_location = location_entry.get().strip()
         new_password = password_entry.get()
 
         if not updated_username:
@@ -481,6 +488,7 @@ def edit_account_info(username):
                     last_name = ?,
                     email = ?,
                     phone = ?,
+                    location = ?,
                     resume_path = ?
                 WHERE username = ?
                 """,
@@ -491,6 +499,7 @@ def edit_account_info(username):
                     updated_last_name,
                     updated_email,
                     updated_phone,
+                    updated_location,
                     updated_resume_path,
                     old_username
                 )
@@ -576,7 +585,7 @@ def show_account_info():
 
     cursor.execute(
         """
-        SELECT username, first_name, last_name, email, phone, resume_path
+        SELECT username, first_name, last_name, email, phone, location, resume_path
         FROM users WHERE username = ?
         """,
         (current_username,)
@@ -588,7 +597,7 @@ def show_account_info():
         open_main_app(current_username)
         return
 
-    username, first_name, last_name, email, phone, resume_path = user_info
+    username, first_name, last_name, email, phone, location, resume_path = user_info
 
     info_card = tk.LabelFrame(
         root,
@@ -605,6 +614,7 @@ def show_account_info():
         ("Last Name:", last_name or "N/A"),
         ("Email Address:", email or "N/A"),
         ("Phone Number:", phone or "N/A"),
+        ("Location:", location or "N/A"),
     ]
 
     for idx, (label, val) in enumerate(details):
@@ -791,43 +801,39 @@ def add_job(job):
 # ============================================================
 
 def search_jobs():
+    """Validate the search and start the API request without blocking Tkinter."""
+    global search_button
 
     description = search_box.get().strip()
 
     if not description:
-
-        results.delete(
-            "1.0",
-            tk.END
-        )
-
-        results.insert(
-            tk.END,
-            "Please enter a job description."
-        )
-
+        results.delete("1.0", tk.END)
+        results.insert(tk.END, "Please enter a job title or keyword.")
         return
 
-    search_button.config(
-        state="disabled"
-    )
+    # Read the signed-in user's location on the main Tkinter thread.
+    # SQLite connections normally cannot be used from a worker thread.
+    try:
+        cursor.execute(
+            "SELECT location FROM users WHERE username = ?",
+            (current_username,)
+        )
+        row = cursor.fetchone()
+        user_location = (row[0] or "").strip() if row else ""
+    except sqlite3.Error as error:
+        messagebox.showerror("Database Error", f"Could not load your location:\n{error}")
+        return
 
-    results.delete(
-        "1.0",
-        tk.END
-    )
+    search_button.config(state="disabled")
+    results.delete("1.0", tk.END)
+    results.insert(tk.END, "Searching for jobs...\\nPlease wait.\\n")
 
-    results.insert(
-        tk.END,
-        "Searching for jobs...\n\n"
-    )
-
+    # A one-item tuple must include the trailing comma.
     thread = threading.Thread(
         target=search_jobs_api,
-        args=(description,),
+        args=(description, user_location),
         daemon=True
     )
-
     thread.start()
 
 
@@ -835,67 +841,48 @@ def search_jobs():
 # ADZUNA API SEARCH
 # ============================================================
 
-def search_jobs_api(description):
-
-    api_url = (
-        "https://api.adzuna.com/v1/api/jobs/us/search/1"
-    )
+def search_jobs_api(description, user_location=""):
+    """Fetch jobs in a worker thread; update Tkinter only via root.after."""
+    api_url = "https://api.adzuna.com/v1/api/jobs/us/search/1"
 
     params = {
-
         "app_id": APP_ID,
-
         "app_key": APP_KEY,
-
         "what": description,
-
-        "results_per_page": 5
+        "results_per_page": 10,
+        "content-type": "application/json"
     }
 
-    request_url = (
-        f"{api_url}?{urlencode(params)}"
-    )
+    # Only send a location filter when the user's profile has one.
+    if user_location:
+        params["where"] = user_location
+
+    request_url = f"{api_url}?{urlencode(params)}"
 
     try:
-
-        with urlopen(
-            request_url,
-            timeout=8
-        ) as response:
-
+        with urlopen(request_url, timeout=20) as response:
             data = json.load(response)
 
-        root.after(
-            0,
-            lambda: display_search_results(data)
-        )
+        root.after(0, lambda result=data: display_search_results(result))
 
-    except HTTPError as e:
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:500]
+        message = f"Adzuna API error ({error.code})."
+        if detail:
+            message += f"\\n\\n{detail}"
+        root.after(0, lambda msg=message: show_search_error(msg))
 
-        root.after(
-            0,
-            lambda: show_search_error(
-                f"API Error: {e.code}"
-            )
-        )
+    except URLError as error:
+        message = f"Could not connect to the job search service.\\n\\n{error.reason}"
+        root.after(0, lambda msg=message: show_search_error(msg))
 
-    except URLError as e:
+    except (TimeoutError, OSError) as error:
+        message = f"The job search request failed. Please try again.\\n\\n{error}"
+        root.after(0, lambda msg=message: show_search_error(msg))
 
-        root.after(
-            0,
-            lambda: show_search_error(
-                f"Connection Error:\n\n{e.reason}"
-            )
-        )
-
-    except Exception as e:
-
-        root.after(
-            0,
-            lambda: show_search_error(
-                f"Unexpected Error:\n\n{e}"
-            )
-        )
+    except Exception as error:
+        message = f"Unexpected job search error: {error}"
+        root.after(0, lambda msg=message: show_search_error(msg))
 
 
 # ============================================================
@@ -903,211 +890,67 @@ def search_jobs_api(description):
 # ============================================================
 
 def display_search_results(data):
-
-    results.delete(
-        "1.0",
-        tk.END
-    )
-
-    jobs = data.get(
-        "results",
-        []
-    )
+    """Show results in the existing search screen, with working Add buttons."""
+    results.delete("1.0", tk.END)
+    jobs = data.get("results", []) if isinstance(data, dict) else []
 
     if not jobs:
-
         results.insert(
             tk.END,
-            "No jobs found for that search."
+            "No jobs found for that search. Try a different title or keyword, "
+            "or update your location in Account."
         )
-
-        search_button.config(
-            state="normal"
-        )
-
+        search_button.config(state="normal")
         return
 
-    for job in jobs:
+    results.insert(tk.END, f"Found {len(jobs)} job(s).\\n\\n")
 
-        title = job.get(
-            "title",
-            "No title"
-        )
+    for index, job in enumerate(jobs):
+        title = job.get("title") or "No title"
+        company_data = job.get("company") or {}
+        location_data = job.get("location") or {}
+        company = company_data.get("display_name") or "Unknown company"
+        location = location_data.get("display_name") or "Unknown location"
+        job_url = job.get("redirect_url") or ""
 
-        company = job.get(
-            "company",
-            {}
-        ).get(
-            "display_name",
-            "Unknown company"
-        )
-
-        location = job.get(
-            "location",
-            {}
-        ).get(
-            "display_name",
-            "Unknown location"
-        )
-
-        job_url = job.get(
-            "redirect_url"
-        )
-
-        results.insert(
-            tk.END,
-            f"{title}\n"
-            f"Company: {company}\n"
-            f"Location: {location}\n"
-        )
+        results.insert(tk.END, f"{title}\\n")
+        results.insert(tk.END, f"Company: {company}\\n")
+        results.insert(tk.END, f"Location: {location}\\n")
 
         if job_url:
-
-            apply_start = results.index(
-                tk.END
-            )
-
-            results.insert(
-                tk.END,
-                "Apply Here\n"
-            )
-
-            apply_end = results.index(
-                tk.END
-            )
-
-            apply_tag = (
-                f"apply_{job.get('id', title)}"
-            )
-
-            results.tag_add(
-                apply_tag,
-                apply_start,
-                apply_end
-            )
-
-            results.tag_config(
-                apply_tag,
-                foreground="blue",
-                underline=True
-            )
-
+            start = results.index(tk.END)
+            results.insert(tk.END, "Apply Here\\n")
+            end = results.index(tk.END)
+            tag = f"apply_{index}"
+            results.tag_add(tag, start, end)
+            results.tag_config(tag, foreground="blue", underline=True)
             results.tag_bind(
-                apply_tag,
-                "<Button-1>",
-                lambda event, url=job_url:
-                    webbrowser.open(url)
+                tag, "<Button-1>",
+                lambda event, url=job_url: webbrowser.open(url)
             )
 
-        results.insert(
-            tk.END,
-            f"Job ID: {job.get('id', 'N/A')}\n"
-        )
-
-        results.insert(
-            tk.END,
-            "-" * 60 + "\n\n"
-        )
-
-    search_button.config(
-        state="normal"
-    )
-
-    show_add_job_buttons(jobs)
-
-
-# ============================================================
-# ADD JOB BUTTONS
-# ============================================================
-
-def show_add_job_buttons(jobs):
-
-    clear_window()
-    root.title("Add Jobs to Dashboard")
-    
-    header = tk.Frame(root)
-    header.pack(fill="x", padx=10, pady=(10, 0))
-
-    tk.Button(
-        header,
-        text="Back to Search",
-        command=lambda: open_main_app(current_username)
-    ).pack(side="left")
-
-    tk.Label(
-        root,
-        text="Add Jobs to Dashboard",
-        font=("Arial", 16, "bold")
-    ).pack(pady=10)
-
-    if not jobs:
-        tk.Label(root, text="No jobs to display.").pack(pady=10)
-        return
-
-    container = tk.Frame(root)
-    container.pack(fill="both", expand=True, padx=10, pady=5)
-
-    canvas = tk.Canvas(container)
-    scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
-    scrollable_frame = tk.Frame(canvas)
-
-    scrollable_frame.bind(
-        "<Configure>",
-        lambda event: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    for job in jobs:
-        frame = tk.Frame(
-            scrollable_frame,
-            bd=1,
-            relief="solid",
-            padx=10,
-            pady=8
-        )
-        frame.pack(fill="x", padx=5, pady=4)
-
-        title = job.get("title", "No title")
-        company = job.get("company", {}).get("display_name", "Unknown company")
-
-        tk.Label(
-            frame,
-            text=f"{title}\n{company}",
-            font=("Arial", 11, "bold"),
-            wraplength=400,
-            justify="left"
-        ).pack(side="left", fill="x", expand=True)
-
-        tk.Button(
-            frame,
-            text="Add",
+        # Keep the Add button on the search results screen instead of
+        # clearing the whole window and navigating away.
+        add_button = tk.Button(
+            results,
+            text="Add to Dashboard",
             command=lambda j=job: add_job(j)
-        ).pack(side="right", padx=(8, 0))
-        
-        
+        )
+        results.window_create(tk.END, window=add_button)
+        results.insert(tk.END, f"\\nJob ID: {job.get('id', 'N/A')}\\n")
+        results.insert(tk.END, "-" * 45 + "\\n\\n")
+
+    search_button.config(state="normal")
+
+
 # ============================================================
 # SEARCH ERROR
 # ============================================================
 
 def show_search_error(message):
-
-    results.delete(
-        "1.0",
-        tk.END
-    )
-
-    results.insert(
-        tk.END,
-        message
-    )
-
-    search_button.config(
-        state="normal"
-    )
+    results.delete("1.0", tk.END)
+    results.insert(tk.END, message)
+    search_button.config(state="normal")
 
 
 # ============================================================
