@@ -97,7 +97,8 @@ selected_resume_path = None
 resume_label = None
 
 search_box = None
-results = None
+results = None  # Legacy Text widget reference; no longer used for search cards
+results_container = None
 search_button = None
 current_username = ""
 
@@ -807,8 +808,13 @@ def search_jobs():
     description = search_box.get().strip()
 
     if not description:
-        results.delete("1.0", tk.END)
-        results.insert(tk.END, "Please enter a job title or keyword.")
+        clear_search_results()
+        tk.Label(
+            results_container,
+            text="Please enter a job title or keyword.",
+            font=("Arial", 11),
+            anchor="w"
+        ).pack(fill="x", padx=10, pady=10)
         return
 
     # Read the signed-in user's location on the main Tkinter thread.
@@ -825,10 +831,16 @@ def search_jobs():
         return
 
     search_button.config(state="disabled")
-    results.delete("1.0", tk.END)
-    results.insert(tk.END, "Searching for jobs...\\nPlease wait.\\n")
+    clear_search_results()
+    tk.Label(
+        results_container,
+        text="Searching for jobs...\nPlease wait.",
+        font=("Arial", 11),
+        justify="left",
+        anchor="w"
+    ).pack(fill="x", padx=10, pady=10)
 
-    # A one-item tuple must include the trailing comma.
+    # Run the network request in a worker thread so the GUI remains responsive.
     thread = threading.Thread(
         target=search_jobs_api,
         args=(description, user_location),
@@ -889,56 +901,106 @@ def search_jobs_api(description, user_location=""):
 # DISPLAY SEARCH RESULTS
 # ============================================================
 
+def clear_search_results():
+    """Remove all result cards/messages from the results area."""
+    if results_container is not None:
+        for widget in results_container.winfo_children():
+            widget.destroy()
+
+
 def display_search_results(data):
-    """Show results in the existing search screen, with working Add buttons."""
-    results.delete("1.0", tk.END)
+    """Display search results as full-width, scrollable job cards."""
+    clear_search_results()
     jobs = data.get("results", []) if isinstance(data, dict) else []
 
     if not jobs:
-        results.insert(
-            tk.END,
-            "No jobs found for that search. Try a different title or keyword, "
-            "or update your location in Account."
-        )
+        tk.Label(
+            results_container,
+            text=(
+                "No jobs found for that search. Try a different title or keyword, "
+                "or update your location in Account."
+            ),
+            font=("Arial", 11),
+            justify="left",
+            anchor="w",
+            wraplength=650
+        ).pack(fill="x", padx=10, pady=10)
         search_button.config(state="normal")
         return
 
-    results.insert(tk.END, f"Found {len(jobs)} job(s).\\n\\n")
+    tk.Label(
+        results_container,
+        text=f"Found {len(jobs)} job(s).",
+        font=("Arial", 11, "bold"),
+        anchor="w"
+    ).pack(fill="x", padx=5, pady=(2, 8))
 
-    for index, job in enumerate(jobs):
+    for job in jobs:
         title = job.get("title") or "No title"
         company_data = job.get("company") or {}
         location_data = job.get("location") or {}
+
         company = company_data.get("display_name") or "Unknown company"
         location = location_data.get("display_name") or "Unknown location"
         job_url = job.get("redirect_url") or ""
+        job_id = job.get("id", "N/A")
 
-        results.insert(tk.END, f"{title}\\n")
-        results.insert(tk.END, f"Company: {company}\\n")
-        results.insert(tk.END, f"Location: {location}\\n")
+        # Each card stretches to the full available width of the results area.
+        job_box = tk.LabelFrame(
+            results_container,
+            text=title,
+            font=("Arial", 12, "bold"),
+            padx=12,
+            pady=10,
+            bd=2,
+            relief="groove"
+        )
+        job_box.pack(fill="x", expand=True, padx=5, pady=5, anchor="n")
+
+        tk.Label(
+            job_box,
+            text=f"Company: {company}",
+            font=("Arial", 10),
+            anchor="w"
+        ).pack(fill="x", pady=2)
+
+        tk.Label(
+            job_box,
+            text=f"Location: {location}",
+            font=("Arial", 10),
+            anchor="w"
+        ).pack(fill="x", pady=2)
+
+        tk.Label(
+            job_box,
+            text=f"Job ID: {job_id}",
+            font=("Arial", 9),
+            fg="gray",
+            anchor="w"
+        ).pack(fill="x", pady=2)
+
+        button_frame = tk.Frame(job_box)
+        button_frame.pack(anchor="w", pady=(8, 0))
 
         if job_url:
-            start = results.index(tk.END)
-            results.insert(tk.END, "Apply Here\\n")
-            end = results.index(tk.END)
-            tag = f"apply_{index}"
-            results.tag_add(tag, start, end)
-            results.tag_config(tag, foreground="blue", underline=True)
-            results.tag_bind(
-                tag, "<Button-1>",
+            apply_link = tk.Label(
+                button_frame,
+                text="Apply Here",
+                fg="red",
+                cursor="hand2",
+                font=("Arial", 10, "underline")
+            )
+            apply_link.pack(side="left", padx=(0, 10))
+            apply_link.bind(
+                "<Button-1>",
                 lambda event, url=job_url: webbrowser.open(url)
             )
 
-        # Keep the Add button on the search results screen instead of
-        # clearing the whole window and navigating away.
-        add_button = tk.Button(
-            results,
+        tk.Button(
+            button_frame,
             text="Add to Dashboard",
             command=lambda j=job: add_job(j)
-        )
-        results.window_create(tk.END, window=add_button)
-        results.insert(tk.END, f"\\nJob ID: {job.get('id', 'N/A')}\\n")
-        results.insert(tk.END, "-" * 45 + "\\n\\n")
+        ).pack(side="left")
 
     search_button.config(state="normal")
 
@@ -948,8 +1010,15 @@ def display_search_results(data):
 # ============================================================
 
 def show_search_error(message):
-    results.delete("1.0", tk.END)
-    results.insert(tk.END, message)
+    clear_search_results()
+    tk.Label(
+        results_container,
+        text=message,
+        font=("Arial", 10),
+        justify="left",
+        anchor="w",
+        wraplength=650
+    ).pack(fill="x", padx=10, pady=10)
     search_button.config(state="normal")
 
 
@@ -1147,7 +1216,7 @@ def open_dashboard():
 
 def open_main_app(username):
 
-    global search_box, results, search_button
+    global search_box, results, results_container, search_button
     global current_username
 
     current_username = username
@@ -1281,10 +1350,8 @@ def open_main_app(username):
         pady=10
     )
 
-    results_frame = tk.Frame(
-        root
-    )
-
+    # Search results area with a vertical scrollbar.
+    results_frame = tk.Frame(root)
     results_frame.pack(
         fill="both",
         expand=True,
@@ -1292,32 +1359,57 @@ def open_main_app(username):
         pady=10
     )
 
-    scrollbar = tk.Scrollbar(
-        results_frame
-    )
-
-    scrollbar.pack(
-        side="right",
-        fill="y"
-    )
-
-    results = tk.Text(
+    results_canvas = tk.Canvas(
         results_frame,
-        width=90,
-        height=20,
-        wrap="word",
-        yscrollcommand=scrollbar.set
+        highlightthickness=0,
+        borderwidth=0
+    )
+    scrollbar = tk.Scrollbar(
+        results_frame,
+        orient="vertical",
+        command=results_canvas.yview
     )
 
-    results.pack(
-        side="left",
-        fill="both",
-        expand=True
+    # Job cards live in this frame, which is embedded in the canvas.
+    results_container = tk.Frame(results_canvas)
+    results_container.bind(
+        "<Configure>",
+        lambda event: results_canvas.configure(
+            scrollregion=results_canvas.bbox("all")
+        )
     )
 
-    scrollbar.config(
-        command=results.yview
+    canvas_window = results_canvas.create_window(
+        (0, 0),
+        window=results_container,
+        anchor="nw"
     )
+
+    # Keep the inner frame the same width as the visible canvas.
+    results_canvas.bind(
+        "<Configure>",
+        lambda event: results_canvas.itemconfigure(
+            canvas_window,
+            width=event.width
+        )
+    )
+    results_canvas.configure(yscrollcommand=scrollbar.set)
+
+    results_canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    # Mouse-wheel scrolling for Windows/macOS and Linux.
+    def _scroll_results(event):
+        if getattr(event, "delta", 0):
+            results_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        elif getattr(event, "num", None) == 4:
+            results_canvas.yview_scroll(-1, "units")
+        elif getattr(event, "num", None) == 5:
+            results_canvas.yview_scroll(1, "units")
+
+    results_canvas.bind_all("<MouseWheel>", _scroll_results)
+    results_canvas.bind_all("<Button-4>", _scroll_results)
+    results_canvas.bind_all("<Button-5>", _scroll_results)
 
 
 # ============================================================
