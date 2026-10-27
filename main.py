@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, OptionMenu
 import sqlite3
 import json
 import webbrowser
@@ -1211,6 +1211,176 @@ def open_dashboard():
 
 
 # ============================================================
+# DELETE ACCOUNT
+# ============================================================
+
+    
+
+
+# ============================================================
+# Manual Job Entry
+# ============================================================
+
+def manual_job_entry():
+    clear_window()
+
+    root.title("JobTrac - Manual Job Entry")
+
+    # Header
+    header = tk.Frame(root, bg="#000000", height=70)
+    header.pack(fill="x")
+
+    tk.Label(
+        header,
+        text="Add a Job",
+        font=("Arial", 20, "bold"),
+        bg="#000000",
+        fg="white"
+    ).pack(side="left", padx=20, pady=15)
+
+    tk.Button(
+        header,
+        text="Back to Search",
+        command=lambda: open_main_app(current_username)
+    ).pack(side="right", padx=10)
+
+    tk.Button(
+        header,
+        text="Dashboard",
+        command=open_dashboard
+    ).pack(side="right", padx=5)
+
+    # Form container
+    form = tk.LabelFrame(
+        root,
+        text=" Enter Job Details ",
+        font=("Arial", 13, "bold"),
+        padx=25,
+        pady=20
+    )
+    form.pack(fill="x", padx=40, pady=30)
+
+    # Helper function to create form fields
+    def add_field(label_text):
+        tk.Label(
+            form,
+            text=label_text,
+            font=("Arial", 11, "bold")
+        ).pack(anchor="w", pady=(8, 3))
+
+        entry = tk.Entry(
+            form,
+            width=45,
+            font=("Arial", 11)
+        )
+        entry.pack(anchor="w", pady=(0, 5))
+
+        return entry
+
+    # Input fields
+    job_title_entry = add_field("Job Title *")
+    company_entry = add_field("Company *")
+    location_entry = add_field("Location")
+    url_entry = add_field("Application URL")
+    notes_entry = add_field("Notes (optional)")
+
+    def save_manual_job():
+        title = job_title_entry.get().strip()
+        company = company_entry.get().strip()
+        location = location_entry.get().strip()
+        url = url_entry.get().strip()
+        notes = notes_entry.get().strip()
+        
+
+        # Validate required fields
+        if not title or not company:
+            messagebox.showerror(
+                "Missing Information",
+                "Please enter both a job title and company."
+            )
+            return
+
+        # Validate URL if provided
+        if url and not url.startswith(("http://", "https://")):
+            messagebox.showerror(
+                "Invalid URL",
+                "The application URL must start with "
+                "http:// or https://."
+            )
+            return
+
+        # Load existing jobs
+        jobs = load_jobs()
+
+        # Check for duplicates
+        for job in jobs:
+            if (
+                job.get("title", "").strip().lower() == title.lower()
+                and job.get("company", "").strip().lower() == company.lower()
+            ):
+                messagebox.showwarning(
+                    "Duplicate Job",
+                    "This job already exists in your dashboard."
+                )
+                return
+
+        # Create a job in the same format used by the dashboard
+        new_job = {
+            "id": f"manual_{__import__('uuid').uuid4().hex}",
+            "title": title,
+            "company": company,
+            "location": location or "Not specified",
+            "url": url,
+            "notes": notes,
+            "status": "Saved"
+        }
+
+        # Save the job
+        try:
+            jobs.append(new_job)
+            save_jobs(jobs)
+        except (OSError, TypeError, ValueError) as error:
+            messagebox.showerror(
+                "Save Error",
+                f"Could not save the job:\n{error}"
+            )
+            return
+
+        messagebox.showinfo(
+            "Success",
+            f"{title} at {company} was added to your dashboard!"
+        )
+
+        # Open dashboard to display the new job
+        open_dashboard()
+
+    # Buttons
+    button_frame = tk.Frame(form)
+    button_frame.pack(anchor="w", pady=20)
+
+    tk.Button(
+        button_frame,
+        text="Save Job",
+        command=save_manual_job,
+        bg="#000000",
+        fg="white",
+        font=("Arial", 11, "bold"),
+        padx=15,
+        pady=6
+    ).pack(side="left", padx=(0, 10))
+
+    tk.Button(
+        button_frame,
+        text="Cancel",
+        command=lambda: open_main_app(current_username),
+        padx=15,
+        pady=6
+    ).pack(side="left")
+
+    job_title_entry.focus()
+
+
+# ============================================================
 # MAIN JOBTRAC APPLICATION
 # ============================================================
 
@@ -1268,32 +1438,56 @@ def open_main_app(username):
             pady=15
         )
 
-    tk.Button(
+    
+    # Dropdown menu in the top-right corner
+    menu_button = tk.Menubutton(
         header,
-        text="Account",
+        text=" Menu ▾",
+        bg="#000000",
+        fg="black",
+        activebackground="#333333",
+        activeforeground="white",
+        font=("Arial", 11, "bold"),
+        relief="flat",
+        padx=15,
+        pady=10,
+        cursor="hand2"
+    )
+
+    dropdown = tk.Menu(
+        menu_button,
+        tearoff=0,
+        bg="white",
+        fg="black",
+        activebackground="#222222",
+        activeforeground="white",
+        font=("Arial", 11)
+    )
+
+    dropdown.add_command(
+        label="Account",
         command=show_account_info
-    ).pack(
-        side="right",
-        padx=5
     )
 
-    tk.Button(
-        header,
-        text="Dashboard",
+    dropdown.add_command(
+        label="Dashboard",
         command=open_dashboard
-    ).pack(
-        side="right",
-        padx=5
+    )
+    dropdown.add_command(
+            label="Manual Job Entry",
+            command=manual_job_entry
     )
 
-    tk.Button(
-        header,
-        text="Logout",
+    dropdown.add_separator()
+
+    dropdown.add_command(
+        label="Logout",
         command=logout
-    ).pack(
-        side="right",
-        padx=20
     )
+
+    menu_button.config(menu=dropdown)
+    menu_button.pack(side="right", padx=20, pady=10)
+
 
     tk.Label(
         root,
