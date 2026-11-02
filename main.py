@@ -163,13 +163,18 @@ def register_user():
             messagebox.showwarning("Warning", f"Could not save resume file: {e}")
 
     try:
+       
         cursor.execute(
             """
-            INSERT INTO users (username, password, first_name, last_name, email, phone, location, resume_path)
+            INSERT INTO users
+            (username, password, first_name, last_name,
+             email, phone, location, resume_path)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (username, password, first_name, last_name, email, phone, stored_resume_path)
+            (username, password, first_name, last_name,
+             email, phone, location, stored_resume_path)
         )
+
         conn.commit()
 
         messagebox.showinfo("Success", "Account created successfully!")
@@ -1179,6 +1184,16 @@ def open_dashboard():
             text=f"Status: {job.get('status', 'Saved')}",
             font=("Arial", 10, "bold")
         ).pack(anchor="w", pady=3)
+        
+        # Display saved job notes
+        tk.Label(
+            job_frame,
+            text=f"Notes: {job.get('notes', '') or 'No notes added'}",
+            font=("Arial", 10),
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", pady=5)
+
 
         button_frame = tk.Frame(job_frame)
         button_frame.pack(anchor="w", pady=5)
@@ -1444,7 +1459,7 @@ def open_main_app(username):
         header,
         text=" Menu ▾",
         bg="#000000",
-        fg="black",
+        fg="white",
         activebackground="#333333",
         activeforeground="white",
         font=("Arial", 11, "bold"),
