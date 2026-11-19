@@ -12,6 +12,7 @@ API keys: edit api_config.json (created next to this file on first run).
 """
 
 import tkinter as tk
+from email_assistant import draft_email
 from tkinter import messagebox, filedialog, ttk
 import sqlite3
 import json
@@ -743,20 +744,44 @@ def open_file_externally(file_path):
 # SHELLS: logged-out card layout and logged-in app layout
 # ============================================================
 
+
 def brand(parent, size=24, bg=BLACK):
-    """Logo image if logo.png exists next to the app, otherwise the JobTrac wordmark."""
+    """Display the JobTrac logo or fallback wordmark."""
     holder = tk.Frame(parent, bg=bg)
+
     try:
         image = tk.PhotoImage(file=str(BASE_DIR / "logo.png"))
-        factor = max(1, math.ceil(image.height() / 48))
-        image = image.subsample(factor, factor)
+
+        # Resize logo to approximately 180 pixels wide
+        target_width = 180
+
+        if image.width() > target_width:
+            factor = max(1, image.width() // target_width)
+            image = image.subsample(factor, factor)
+
+        elif image.width() < target_width:
+            factor = max(1, round(target_width / image.width()))
+            image = image.zoom(factor, factor)
+
         logo = tk.Label(holder, image=image, bg=bg)
         logo.image = image
         logo.pack()
+
     except (tk.TclError, OSError):
-        tk.Label(holder, text="Job", font=("Arial", size, "bold"), fg=WHITE, bg=bg).pack(side="left")
-        tk.Label(holder, text="Trac", font=("Arial", size, "bold"), fg=RED, bg=bg).pack(side="left")
+        tk.Label(
+            holder, text="Job",
+            font=("Arial", size, "bold"),
+            fg=WHITE, bg=bg
+        ).pack(side="left")
+
+        tk.Label(
+            holder, text="Trac",
+            font=("Arial", size, "bold"),
+            fg=RED, bg=bg
+        ).pack(side="left")
+
     return holder
+
 
 
 def auth_shell(title, subtitle, min_width=420):
@@ -1430,6 +1455,111 @@ def open_notes_editor(job, status_filter):
     text.focus()
 
 
+def open_email_drafter(job):
+    dialog, body = themed_dialog("AI Email Assistant", 650, 600)
+
+    tk.Label(
+        body,
+        text="AI Email Assistant",
+        font=("Arial", 18, "bold"),
+        bg=WHITE,
+        fg=BLACK
+    ).pack(anchor="w", pady=(0, 8))
+
+    tk.Label(
+        body,
+        text=f"{job.get('title', 'Job')} - {job.get('company', 'Company')}",
+        font=("Arial", 11),
+        bg=WHITE,
+        fg=MUTED
+    ).pack(anchor="w", pady=(0, 15))
+
+    tk.Label(
+        body,
+        text="Choose Email Type:",
+        font=("Arial", 11, "bold"),
+        bg=WHITE,
+        fg=BLACK
+    ).pack(anchor="w")
+
+    email_type = tk.StringVar(value="interest")
+
+    tk.Radiobutton(
+        body, text="Interest Email",
+        variable=email_type, value="interest",
+        bg=WHITE, fg=BLACK,
+        activebackground=WHITE
+    ).pack(anchor="w")
+
+    tk.Radiobutton(
+        body, text="Follow-up Email",
+        variable=email_type, value="followup",
+        bg=WHITE, fg=BLACK,
+        activebackground=WHITE
+    ).pack(anchor="w")
+
+    email_text = tk.Text(
+        body, height=14, wrap="word",
+        font=("Arial", 11),
+        relief="solid", bd=1
+    )
+    email_text.pack(fill="both", expand=True, pady=12)
+
+    def generate():
+        email_text.delete("1.0", "end")
+        email_text.insert("1.0", "Generating email...")
+        dialog.update_idletasks()
+
+        def worker():
+            try:
+                result = draft_email(
+                    job.get("title", ""),
+                    job.get("company", ""),
+                    email_type.get()
+                )
+            except Exception as exc:
+                error = str(exc)
+                dialog.after(0, lambda: show_error(error))
+            else:
+                dialog.after(0, lambda: show_result(result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show_result(result):
+        if not dialog.winfo_exists():
+            return
+        email_text.delete("1.0", "end")
+        email_text.insert("1.0", result)
+
+    def show_error(error):
+        if not dialog.winfo_exists():
+            return
+        email_text.delete("1.0", "end")
+        messagebox.showerror("AI Email Error", error)
+
+    def copy_email():
+        content = email_text.get("1.0", "end").strip()
+        if not content or content == "Generating email...":
+            return
+        dialog.clipboard_clear()
+        dialog.clipboard_append(content)
+        messagebox.showinfo("JobTrac", "Email copied!")
+
+    actions = tk.Frame(body, bg=WHITE)
+    actions.pack(fill="x", pady=(5, 0))
+
+    FlatButton(
+        actions, "Generate Email", generate, "primary"
+    ).pack(side="left", padx=(0, 8))
+
+    FlatButton(
+        actions, "Copy Email", copy_email, "outline"
+    ).pack(side="left", padx=4)
+
+    FlatButton(
+        actions, "Close", dialog.destroy, "outline"
+    ).pack(side="left", padx=4)
+
 def dashboard_job_card(parent, job, status_filter):
     outer, inner = card(parent)
     outer.pack(fill="x", padx=4, pady=5)
@@ -1466,6 +1596,14 @@ def dashboard_job_card(parent, job, status_filter):
                "outline").pack(side="left", padx=3)
     FlatButton(buttons, "Notes", lambda j=job: open_notes_editor(j, status_filter),
                "outline").pack(side="left", padx=3)
+
+    FlatButton(
+        buttons,
+        "Draft Email",
+        lambda j=job: open_email_drafter(j),
+        "primary"
+    ).pack(side="left", padx=3)
+
 
     status_box = themed_combobox(buttons, STATUSES, width=12, value=status)
     status_box.pack(side="left", padx=(10, 3), ipady=2)
