@@ -1,18 +1,20 @@
 """
 JobTrac - job search and application tracker.
 
-Desktop app built with Tkinter + SQLite. Searches Adzuna, The Muse and USAJOBS,
-tracks applications on a dashboard and schedules interviews on a calendar.
+Desktop app built with Tkinter + SQLite. Searches Adzuna and USAJOBS, tracks
+applications on a dashboard, schedules interviews on a calendar and drafts
+emails with Google Gemini.
 
 Theme: red / black / white.
 
 Run:      python3 jobtrac.py
 API keys: edit api_config.json (created next to this file on first run).
           Never commit that file to GitHub.
+Gemini:   set the GEMINI_API_KEY environment variable and run
+          pip install google-genai
 """
 
 import tkinter as tk
-from email_assistant import draft_email
 from tkinter import messagebox, filedialog, ttk
 import sqlite3
 import json
@@ -54,7 +56,6 @@ RESUME_DIR.mkdir(exist_ok=True)
 API_CONFIG_TEMPLATE = {
     "adzuna_app_id": "PASTE_ADZUNA_APP_ID_HERE",
     "adzuna_app_key": "PASTE_ADZUNA_APP_KEY_HERE",
-    "muse_api_key": "",
     "usajobs_email": "PASTE_USAJOBS_EMAIL_HERE",
     "usajobs_key": "PASTE_USAJOBS_KEY_HERE",
 }
@@ -245,7 +246,7 @@ def add_job(job):
 
 
 # ============================================================
-# MULTI-SOURCE JOB SEARCH: ADZUNA + THE MUSE + USAJOBS
+# MULTI-SOURCE JOB SEARCH: ADZUNA + USAJOBS
 # ============================================================
 
 def location_zipcodes(record, location_text=""):
@@ -352,90 +353,6 @@ def fetch_adzuna(description, location="", zipcode=""):
             coordinates=location_coordinates(item) + location_coordinates(place),
         ))
     return jobs
-
-
-def muse_category(description):
-    """The Muse has category filters, not a free-text job-keyword parameter."""
-    q = description.lower()
-    if any(x in q for x in ("machine learning", "data scientist", "artificial intelligence")):
-        return "Data Science"
-    if any(x in q for x in ("analytics", "sql", "data engineer", "data analyst", "database")):
-        return "Data and Analytics"
-    if any(x in q for x in ("software", "python", "developer", "programmer", "coding")):
-        return "Software Engineering"
-    if any(x in q for x in ("cyber", "network", "help desk", "information technology", "tech support")):
-        return "Computer and IT"
-    if "engineer" in q:
-        return "Science and Engineering"
-    if any(x in q for x in ("teacher", "education")):
-        return "Education"
-    if "nurs" in q:
-        return "Nurses"
-    if "marketing" in q:
-        return "Marketing"
-    if any(x in q for x in ("retail", "cashier")):
-        return "Retail"
-    if "finance" in q or "account" in q:
-        return "Accounting and Finance"
-    return None
-
-
-def fetch_muse(description, location="", zipcode=""):
-    category = muse_category(description)
-    config = load_api_config()
-    api_key = str(config.get("muse_api_key", "")).strip()
-    keywords = [word.lower() for word in description.split() if len(word) > 2]
-    matching, related, seen = [], [], set()
-    # Page size is defined by The Muse; search up to 3 pages and rank titles.
-    for page in range(3):
-        params = {"page": page}
-        if category:
-            params["category"] = category
-        if api_key:
-            params["api_key"] = api_key
-        url = "https://www.themuse.com/api/public/jobs?" + urlencode(params)
-        try:
-            data = request_json(url)
-        except Exception:
-            if page == 0:
-                raise
-            break
-        records = data.get("results") or []
-        if not records:
-            break
-        for item in records:
-            item_id = str(item.get("id") or (item.get("refs") or {}).get("landing_page") or "")
-            if not item_id or item_id in seen:
-                continue
-            seen.add(item_id)
-            title = item.get("name") or "Untitled job"
-            locations = item.get("locations") or []
-            location_text = ", ".join(place.get("name", "") for place in locations
-                                      if isinstance(place, dict)) or "Not specified"
-            job = normalized_job(
-                "The Muse", item_id, title,
-                (item.get("company") or {}).get("name"), location_text,
-                (item.get("refs") or {}).get("landing_page"),
-                postal_codes=location_zipcodes(item, location_text) + [
-                    code for place in locations if isinstance(place, dict)
-                    for code in location_zipcodes(place, place.get("name", ""))
-                ],
-                coordinates=[
-                    coord for place in locations if isinstance(place, dict)
-                    for coord in location_coordinates(place)
-                ],
-            )
-            if keywords and any(word in title.lower() for word in keywords):
-                matching.append(job)
-            else:
-                related.append(job)
-        if len(matching) >= RESULTS_PER_SOURCE:
-            break
-        page_count = data.get("page_count")
-        if isinstance(page_count, int) and page + 1 >= page_count:
-            break
-    # Only include approximate/category results if we recognized a category.
-    return (matching + (related if category else []))[:RESULTS_PER_SOURCE]
 
 
 def fetch_usajobs(description, location="", zipcode=""):
@@ -745,16 +662,14 @@ def open_file_externally(file_path):
 # ============================================================
 
 
-def brand(parent, size=24, bg=BLACK):
+def brand(parent, size=24, bg=BLACK, target_width=180):
     """Display the JobTrac logo or fallback wordmark."""
     holder = tk.Frame(parent, bg=bg)
 
     try:
         image = tk.PhotoImage(file=str(BASE_DIR / "logo.png"))
 
-        # Resize logo to approximately 180 pixels wide
-        target_width = 180
-
+        # Resize logo to approximately target_width pixels wide
         if image.width() > target_width:
             factor = max(1, image.width() // target_width)
             image = image.subsample(factor, factor)
@@ -790,9 +705,7 @@ def auth_shell(title, subtitle, min_width=420):
     root.configure(bg=BLACK)
     wrap = tk.Frame(root, bg=BLACK)
     wrap.place(relx=0.5, rely=0.5, anchor="center")
-    brand(wrap, size=36).pack(pady=(0, 4))
-    tk.Label(wrap, text="Search. Apply. Track. Win.", font=("Arial", 11), fg="#BBBBBB",
-             bg=BLACK).pack(pady=(0, 14))
+    brand(wrap, size=36, target_width=360).pack(pady=(0, 18))
     outer = tk.Frame(wrap, bg=WHITE)
     outer.pack()
     tk.Frame(outer, bg=RED, height=6).pack(fill="x")
@@ -1241,7 +1154,7 @@ def open_main_app(username):
         display_search_results(LAST_SEARCH["data"])
     else:
         tk.Label(results_container,
-                 text="Enter a job title or keyword to search Adzuna, The Muse and USAJOBS at once.",
+                 text="Enter a job title or keyword to search Adzuna and USAJOBS at once.",
                  font=("Arial", 11), bg=WHITE, fg=MUTED).pack(anchor="w", padx=4, pady=8)
     search_box.focus()
 
@@ -1286,7 +1199,7 @@ def search_jobs():
     user_location = ((user[6] or "").strip() if user else "")
 
     search_button.set_enabled(False)
-    info = f"Searching jobs near {zipcode} ({mode})..." if zipcode else "Searching all 3 job sources..."
+    info = f"Searching jobs near {zipcode} ({mode})..." if zipcode else "Searching Adzuna and USAJOBS..."
     show_search_message(info)
     search_button.set_enabled(False)
 
@@ -1309,8 +1222,7 @@ def search_jobs_api(token, description, location="", zipcode="", mode="Exact ZIP
             SEARCH_QUEUE.put((token, {"results": [], "errors": [str(exc)], "zipcode": zipcode,
                                       "mode": mode, "query": description}))
             return
-    for name, fetcher in (("Adzuna", fetch_adzuna), ("The Muse", fetch_muse),
-                          ("USAJOBS", fetch_usajobs)):
+    for name, fetcher in (("Adzuna", fetch_adzuna), ("USAJOBS", fetch_usajobs)):
         try:
             matches = [job for job in fetcher(description, location, zipcode)
                        if matches_zip(job, zipcode, mode, center)]
@@ -1417,6 +1329,61 @@ def display_search_results(data):
 
 
 # ============================================================
+# AI EMAIL ASSISTANT (Google Gemini)
+# ============================================================
+
+def draft_email(job_title, company, email_type):
+    """Generate an email using Google's Gemini AI."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("Gemini API key is missing. Set the GEMINI_API_KEY environment variable.")
+
+    try:  # imported here so the rest of JobTrac still runs without the package
+        from google import genai
+    except ImportError as exc:
+        raise ValueError("The google-genai package is not installed. "
+                         "Run: pip install google-genai") from exc
+
+    client = genai.Client(api_key=api_key)
+
+    if email_type == "followup":
+        purpose = "Follow up on a submitted job application."
+    elif email_type == "interest":
+        purpose = "Express interest in a job opportunity."
+    else:
+        raise ValueError("Invalid email type.")
+
+    prompt = f"""
+    You are a professional career assistant.
+
+    Write a short, professional job application email.
+
+    Job title: {job_title}
+    Company: {company}
+    Email purpose: {purpose}
+
+    Requirements:
+    - Include a subject line.
+    - Include a professional greeting.
+    - Keep the email concise and friendly.
+    - Do not invent experience, qualifications,
+      application dates, or recruiter names.
+    - Use placeholders for missing information.
+    - End with a professional closing.
+    """
+
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=prompt
+    )
+
+    if not response.text:
+        raise ValueError("Gemini returned an empty response.")
+
+    return response.text
+
+
+# ============================================================
 # DASHBOARD
 # ============================================================
 
@@ -1455,84 +1422,52 @@ def open_notes_editor(job, status_filter):
     text.focus()
 
 
-def open_email_drafter(job):
-    dialog, body = themed_dialog("AI Email Assistant", 650, 600)
+def open_email_drafter(job, status_filter="All"):
+    """AI email assistant shown inline as a page (no pop-up window)."""
+    body = build_shell("dashboard")
+    page_title(body, "AI Email Assistant",
+               f"{job.get('title', 'Job')} - {_text(job.get('company'), default='Company')}")
 
-    tk.Label(
-        body,
-        text="AI Email Assistant",
-        font=("Arial", 18, "bold"),
-        bg=WHITE,
-        fg=BLACK
-    ).pack(anchor="w", pady=(0, 8))
+    outer, inner = card(body)
+    outer.pack(fill="both", expand=True)
 
-    tk.Label(
-        body,
-        text=f"{job.get('title', 'Job')} - {job.get('company', 'Company')}",
-        font=("Arial", 11),
-        bg=WHITE,
-        fg=MUTED
-    ).pack(anchor="w", pady=(0, 15))
-
-    tk.Label(
-        body,
-        text="Choose Email Type:",
-        font=("Arial", 11, "bold"),
-        bg=WHITE,
-        fg=BLACK
-    ).pack(anchor="w")
-
+    tk.Label(inner, text="Choose Email Type:", font=("Arial", 11, "bold"),
+             bg=WHITE, fg=BLACK).pack(anchor="w")
     email_type = tk.StringVar(value="interest")
+    for text, value in (("Interest Email", "interest"), ("Follow-up Email", "followup")):
+        tk.Radiobutton(inner, text=text, variable=email_type, value=value, bg=WHITE, fg=BLACK,
+                       activebackground=WHITE, selectcolor=WHITE).pack(anchor="w")
 
-    tk.Radiobutton(
-        body, text="Interest Email",
-        variable=email_type, value="interest",
-        bg=WHITE, fg=BLACK,
-        activebackground=WHITE
-    ).pack(anchor="w")
-
-    tk.Radiobutton(
-        body, text="Follow-up Email",
-        variable=email_type, value="followup",
-        bg=WHITE, fg=BLACK,
-        activebackground=WHITE
-    ).pack(anchor="w")
-
-    email_text = tk.Text(
-        body, height=14, wrap="word",
-        font=("Arial", 11),
-        relief="solid", bd=1
-    )
+    email_text = tk.Text(inner, height=14, wrap="word", font=("Arial", 11), relief="flat",
+                         highlightthickness=1, highlightbackground=LINE, highlightcolor=RED,
+                         insertbackground=RED, selectbackground=RED, selectforeground=WHITE)
     email_text.pack(fill="both", expand=True, pady=12)
 
     def generate():
         email_text.delete("1.0", "end")
         email_text.insert("1.0", "Generating email...")
-        dialog.update_idletasks()
+        company = _text(job.get("company"))
+        kind = email_type.get()
 
         def worker():
             try:
-                result = draft_email(
-                    job.get("title", ""),
-                    job.get("company", ""),
-                    email_type.get()
-                )
+                result = draft_email(job.get("title", ""), company, kind)
             except Exception as exc:
                 error = str(exc)
-                dialog.after(0, lambda: show_error(error))
+                root.after(0, lambda: show_error(error))
             else:
-                dialog.after(0, lambda: show_result(result))
+                root.after(0, lambda: show_result(result))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def show_result(result):
-        if not dialog.winfo_exists():
+        if not widget_alive(email_text):  # user left the page while it was generating
             return
         email_text.delete("1.0", "end")
         email_text.insert("1.0", result)
 
     def show_error(error):
-        if not dialog.winfo_exists():
+        if not widget_alive(email_text):
             return
         email_text.delete("1.0", "end")
         messagebox.showerror("AI Email Error", error)
@@ -1541,24 +1476,17 @@ def open_email_drafter(job):
         content = email_text.get("1.0", "end").strip()
         if not content or content == "Generating email...":
             return
-        dialog.clipboard_clear()
-        dialog.clipboard_append(content)
+        root.clipboard_clear()
+        root.clipboard_append(content)
         messagebox.showinfo("JobTrac", "Email copied!")
 
-    actions = tk.Frame(body, bg=WHITE)
-    actions.pack(fill="x", pady=(5, 0))
+    actions = tk.Frame(inner, bg=WHITE)
+    actions.pack(fill="x")
+    FlatButton(actions, "Generate Email", generate, "primary").pack(side="left", padx=(0, 8))
+    FlatButton(actions, "Copy Email", copy_email, "outline").pack(side="left", padx=4)
+    FlatButton(actions, "Back to Dashboard", lambda: open_dashboard(status_filter),
+               "outline").pack(side="left", padx=4)
 
-    FlatButton(
-        actions, "Generate Email", generate, "primary"
-    ).pack(side="left", padx=(0, 8))
-
-    FlatButton(
-        actions, "Copy Email", copy_email, "outline"
-    ).pack(side="left", padx=4)
-
-    FlatButton(
-        actions, "Close", dialog.destroy, "outline"
-    ).pack(side="left", padx=4)
 
 def dashboard_job_card(parent, job, status_filter):
     outer, inner = card(parent)
@@ -1600,7 +1528,7 @@ def dashboard_job_card(parent, job, status_filter):
     FlatButton(
         buttons,
         "Draft Email",
-        lambda j=job: open_email_drafter(j),
+        lambda j=job: open_email_drafter(j, status_filter),
         "primary"
     ).pack(side="left", padx=3)
 
