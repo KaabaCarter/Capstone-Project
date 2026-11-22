@@ -10,7 +10,7 @@ Theme: red / black / white.
 Run:      python3 jobtrac.py
 API keys: edit api_config.json (created next to this file on first run).
           Never commit that file to GitHub.
-Gemini:   set the GEMINI_API_KEY environment variable and run
+Gemini:   add "gemini_api_key" to api_config.json and run
           pip install google-genai
 """
 
@@ -58,6 +58,7 @@ API_CONFIG_TEMPLATE = {
     "adzuna_app_key": "PASTE_ADZUNA_APP_KEY_HERE",
     "usajobs_email": "PASTE_USAJOBS_EMAIL_HERE",
     "usajobs_key": "PASTE_USAJOBS_KEY_HERE",
+    "gemini_api_key": "PASTE_GEMINI_API_KEY_HERE",
 }
 
 STATUSES = ["Saved", "Applied", "Interviewing", "Offered", "Denied"]
@@ -1334,9 +1335,11 @@ def display_search_results(data):
 
 def draft_email(job_title, company, email_type):
     """Generate an email using Google's Gemini AI."""
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = str(load_api_config().get("gemini_api_key", "")).strip()
+    if not api_key or "PASTE_" in api_key:
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()  # optional fallback
     if not api_key:
-        raise ValueError("Gemini API key is missing. Set the GEMINI_API_KEY environment variable.")
+        raise ValueError("Add your Gemini API key as \"gemini_api_key\" in api_config.json")
 
     try:  # imported here so the rest of JobTrac still runs without the package
         from google import genai
